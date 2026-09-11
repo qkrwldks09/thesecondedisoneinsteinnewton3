@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>석식 신청자 탐지기</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        /* 기본 리셋 및 폰트 설정 */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f6; color: #333; line-height: 1.6; }
+        
+        /* 메인 컨테이너 (모바일 중심 반응형) */
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #fff; min-height: 100vh; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
+        
+        /* 헤더 영역 */
+        header { text-align: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #eaeaea; }
+        h1 { font-size: 1.8rem; color: #2c3e50; margin-bottom: 8px; }
+        .subtitle { font-size: 1rem; color: #7f8c8d; word-break: keep-all; }
+        
+        /* 정보 영역 */
+        .info-card { background-color: #e8f4f8; padding: 16px; border-radius: 8px; margin-bottom: 24px; font-size: 0.95rem; }
+        .info-card p { margin-bottom: 8px; }
+        .info-card p:last-child { margin-bottom: 0; }
+        .highlight { font-weight: bold; color: #0056b3; }
+        
+        /* 상태 메시지 */
+        #status-message { text-align: center; font-weight: bold; padding: 12px; margin-bottom: 16px; border-radius: 8px; background-color: #f0f0f0; color: #555; transition: all 0.3s; }
+        
+        /* 컨트롤 (버튼) 영역 */
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+        .btn { flex: 1; min-width: 120px; min-height: 48px; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: background-color 0.2s, opacity 0.2s; display: flex; align-items: center; justify-content: center; text-align: center; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .btn-start { background-color: #27ae60; color: white; }
+        .btn-start:not(:disabled):hover { background-color: #219653; }
+        .btn-stop { background-color: #e74c3c; color: white; }
+        .btn-stop:not(:disabled):hover { background-color: #c0392b; }
+        .btn-upload { background-color: #2980b9; color: white; cursor: pointer; }
+        .btn-upload:not(.disabled-label):hover { background-color: #1f618d; }
+        .disabled-label { opacity: 0.5; pointer-events: none; }
+        
+        input[type="file"] { display: none; }
+        
+        /* 입력 디스플레이 영역 */
+        .display-area { display: flex; justify-content: center; align-items: center; background-color: #000; border-radius: 8px; overflow: hidden; min-height: 300px; margin-bottom: 20px; position: relative; }
+        #webcam-container canvas { display: block; max-width: 100%; height: auto; }
+        #image-preview { max-width: 100%; max-height: 400px; display: none; object-fit: contain; }
+        .placeholder-text { position: absolute; color: #fff; font-size: 1rem; opacity: 0.7; }
+        
+        /* 결과 영역 */
+        .result-area { background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 24px; border: 1px solid #eee; }
+        #highest-prediction { font-size: 1.5rem; text-align: center; font-weight: bold; color: #2c3e50; margin-bottom: 8px; }
+        .warning { text-align: center; font-size: 0.85rem; color: #e67e22; margin-bottom: 20px; word-break: keep-all; }
+        
+        /* 확률 막대그래프 */
+        #label-container { display: flex; flex-direction: column; gap: 12px; }
+        .bar-row { display: flex; align-items: center; font-size: 0.9rem; }
+        .bar-label { width: 80px; font-weight: bold; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+        .bar-track { flex: 1; background-color: #e0e0e0; height: 16px; border-radius: 8px; overflow: hidden; margin: 0 10px; }
+        .bar-fill { height: 100%; background-color: #3498db; width: 0%; transition: width 0.1s ease-out; }
+        .bar-percent { width: 45px; text-align: right; color: #555; }
+        
+        /* 하단 영역 (한계 및 팀 정보) */
+        .footer-info { border-top: 1px dashed #ccc; padding-top: 16px; font-size: 0.9rem; color: #555; }
+        .footer-info h3 { font-size: 1rem; color: #333; margin-bottom: 8px; }
+        .footer-info ul { padding-left: 20px; margin-bottom: 16px; }
+        .footer-info li { margin-bottom: 6px; }
+        .team-info { background-color: #eee; padding: 12px; border-radius: 6px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>석식 신청자 탐지기 🍽️</h1>
+        <p class="subtitle">얼굴을 인식하여 석식 신청자를 빠르고 정확하게 분류합니다.</p>
+    </header>
+
+    <section class="info-card">
+        <p><span class="highlight">해결하려는 문제:</span> 석식 시간 명단 확인으로 인한 긴 대기 줄과 영양사님의 높은 피로도 개선</p>
+        <p><span class="highlight">주요 사용자:</span> 영양사님, 석식 신청자</p>
+    </section>
+
+    <main>
+        <div id="status-message">모델을 불러오는 중입니다. 잠시만 기다려주세요...</div>
+
+        <div class="controls">
+            <button id="btn-start" class="btn btn-start" disabled onclick="startWebcam()">카메라 시작</button>
+            <button id="btn-stop" class="btn btn-stop" disabled onclick="stopWebcam()">카메라 중지</button>
+            <label id="lbl-upload" for="image-upload" class="btn btn-upload disabled-label">사진 업로드</label>
+            <input type="file" id="image-upload" accept="image/*" disabled onchange="handleImageUpload(event)">
+        </div>
+
+        <div class="display-area">
+            <span class="placeholder-text" id="display-placeholder">입력 장치를 선택해주세요</span>
+            <div id="webcam-container"></div>
+            <img id="image-preview" alt="업로드 이미지 미리보기">
+        </div>
+
+        <div class="result-area">
+            <div id="highest-prediction">예측 대기 중</div>
+            <p class="warning">⚠️ 가장 높은 확률이 반드시 정답은 아닙니다. 최종 확인이 필요합니다.</p>
+            <div id="label-container">
+                </div>
+        </div>
+    </main>
+
+    <footer class="footer-info">
+        <h3>💡 모델의 한계 및 주의사항</h3>
+        <ul>
+            <li><strong>인식의 한계:</strong> 조명, 각도, 화질에 따라 얼굴 인식을 잘 못할 수 있습니다.</li>
+            <li><strong>사람의 확인:</strong> 예측이 틀릴 수 있으므로 영양사님이 정확히 인식했는지 최종 확인해야 합니다.</li>
+        </ul>
+        <div class="team-info">
+            <strong>팀명:</strong> 제2의아인슈타인에디슨뉴턴<br>
+            <strong>팀원:</strong> 20809 박지안, 20810 신채윤
+        </div>
+    </footer>
+</div>
+
+<script>
+    // 모델 공유 주소 (제공해주신 실제 모델 링크)
+    const URL = "https://teachablemachine.withgoogle.com/models/HNAeMURau/";
+
+    let model, webcam, labelContainer, maxPredictions;
+    let isPredicting = false;
+    let animationId = null;
+    let currentObjectURL = null; // 메모리 누수 방지용
+
+    // DOM 요소 캐싱
+    const statusMsg = document.getElementById("status-message");
+    const btnStart = document.getElementById("btn-start");
+    const btnStop = document.getElementById("btn-stop");
+    const btnUpload = document.getElementById("image-upload");
+    const lblUpload = document.getElementById("lbl-upload");
+    const webcamContainer = document.getElementById("webcam-container");
+    const imagePreview = document.getElementById("image-preview");
+    const placeholder = document.getElementById("display-placeholder");
+    const highestPredDisplay = document.getElementById("highest-prediction");
+
+    // 1. 모델 불러오기 (페이지 로드 시 자동 실행)
+    async function initModel() {
+        try {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+            
+            // 모델과 메타데이터 로드
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            // 결과를 표시할 컨테이너 초기화
+            labelContainer = document.getElementById("label-container");
+            initResultBars();
+
+            // 모델 로딩 완료 시 버튼 활성화
+            btnStart.disabled = false;
+            btnUpload.disabled = false;
+            lblUpload.classList.remove("disabled-label");
+            
+            setStatus("모델 로딩 완료! 카메라를 켜거나 사진을 올리세요.", "#27ae60", "#e8f8f5");
+        } catch (error) {
+            console.error(error);
+            setStatus("오류: 모델을 불러오지 못했습니다. 주소나 인터넷 연결을 확인하세요.", "#c0392b", "#fadbd8");
+        }
+    }
+
+    // 상태 메시지 업데이트 함수
+    function setStatus(text, color = "#555", bgColor = "#f0f0f0") {
+        statusMsg.innerText = text;
+        statusMsg.style.color = color;
+        statusMsg.style.backgroundColor = bgColor;
+    }
+
+    // 결과 막대그래프 뼈대 만들기 (UI 흔들림 방지를 위해 미리 생성)
+    function initResultBars() {
+        labelContainer.innerHTML = ""; // 기존 내용 비우기
+        const classLabels = model.getClassLabels();
+        
+        for (let i = 0; i < maxPredictions; i++) {
+            const row = document.createElement("div");
+            row.className = "bar-row";
+            
+            // 클래스 이름 (실제 모델의 메타데이터에서 불러옴)
+            const label = document.createElement("div");
+            label.className = "bar-label";
+            label.innerText = classLabels[i];
+            
+            // 막대 궤도 및 채우기
+            const track = document.createElement("div");
+            track.className = "bar-track";
+            const fill = document.createElement("div");
+            fill.className = "bar-fill";
+            fill.id = `bar-fill-${i}`;
+            track.appendChild(fill);
+            
+            // 퍼센트 텍스트
+            const percent = document.createElement("div");
+            percent.className = "bar-percent";
+            percent.id = `bar-percent-${i}`;
+            percent.innerText = "0%";
+            
+            row.appendChild(label);
+            row.appendChild(track);
+            row.appendChild(percent);
+            labelContainer.appendChild(row);
+        }
+    }
+
+    // 2. 카메라 실시간 분류 시작
+    async function startWebcam() {
+        // 이미 실행 중이면 중복 실행 방지
+        if (isPredicting && webcam && webcam.playing) return;
+        
+        // 업로드된 이미지 정리
+        clearImagePreview();
+        
+        try {
+            setStatus("카메라 권한을 요청 중입니다...", "#d35400", "#fdebd0");
+            
+            const flip = true; // 좌우 반전
+            const width = 300; // 카메라 해상도
+            const height = 300;
+            webcam = new tmImage.Webcam(width, height, flip);
+            
+            await webcam.setup(); // 카메라 권한 요청
+            await webcam.play();
+            
+            placeholder.style.display = "none";
+            webcamContainer.innerHTML = "";
+            webcamContainer.appendChild(webcam.canvas);
+            
+            // 버튼 상태 변경
+            btnStart.disabled = true;
+            btnStop.disabled = false;
+            isPredicting = true;
+            setStatus("카메라 작동 중 (실시간 분류)", "#2980b9", "#ebf5fb");
+            
+            // 반복 예측 시작
+            window.requestAnimationFrame(loop);
+            
+        } catch (error) {
+            console.error(error);
+            setStatus("오류: 카메라 권한이 거부되었거나 사용할 수 없습니다.", "#c0392b", "#fadbd8");
+        }
+    }
+
+    // 카메라 예측 무한 루프
+    async function loop() {
+        if (!isPredicting) return;
+        webcam.update(); // 캔버스 프레임 업데이트
+        await predict(webcam.canvas);
+        animationId = window.requestAnimationFrame(loop);
+    }
+
+    // 3. 카메라 실시간 분류 중지
+    function stopWebcam() {
+        isPredicting = false;
+        if (animationId) {
+            window.cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+        if (webcam) {
+            webcam.stop();
+            webcam = null;
+        }
+        
+        webcamContainer.innerHTML = "";
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        
+        if(imagePreview.style.display !== "block") {
+            placeholder.style.display = "block";
+            setStatus("입력이 중지되었습니다. 다시 시작하거나 사진을 올리세요.", "#555", "#f0f0f0");
+            highestPredDisplay.innerText = "예측 대기 중";
+            resetBars();
+        }
+    }
+
+    // 4. 이미지 파일 업로드 분류
+    async function handleImageUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        // 파일 유효성 검사
+        if (!file.type.startsWith("image/")) {
+            setStatus("오류: 이미지 파일(.jpg, .png 등)만 업로드할 수 있습니다.", "#c0392b", "#fadbd8");
+            return;
+        }
+        
+        // 실행 중인 카메라가 있다면 중지
+        stopWebcam();
+        
+        // 이전 객체 URL 메모리 해제
+        if (currentObjectURL) {
+            URL.revokeObjectURL(currentObjectURL);
+        }
+        
+        // 새 이미지 브라우저 메모리에 로드
+        currentObjectURL = window.URL.createObjectURL(file);
+        imagePreview.src = currentObjectURL;
+        
+        placeholder.style.display = "none";
+        imagePreview.style.display = "block";
+        setStatus("이미지 분석 중...", "#d35400", "#fdebd0");
+        
+        // 이미지가 화면에 완전히 로드된 후 예측 실행
+        imagePreview.onload = async () => {
+            await predict(imagePreview);
+            setStatus("이미지 분류 완료!", "#27ae60", "#e8f8f5");
+        }
+        
+        // 같은 파일을 다시 선택해도 작동하도록 value 초기화
+        event.target.value = "";
+    }
+
+    // 업로드 이미지 미리보기 정리
+    function clearImagePreview() {
+        imagePreview.style.display = "none";
+        imagePreview.src = "";
+        if (currentObjectURL) {
+            URL.revokeObjectURL(currentObjectURL);
+            currentObjectURL = null;
+        }
+    }
+
+    // 막대그래프 0%로 초기화
+    function resetBars() {
+        for (let i = 0; i < maxPredictions; i++) {
+            document.getElementById(`bar-fill-${i}`).style.width = "0%";
+            document.getElementById(`bar-percent-${i}`).innerText = "0%";
+        }
+    }
+
+    // 5. 예측 및 결과 화면 표시 (카메라, 이미지 공통 사용)
+    async function predict(inputElement) {
+        // 모델을 사용해 예측 (확률 배열 반환)
+        const predictions = await model.predict(inputElement);
+        
+        let highestProb = 0;
+        let highestClass = "";
+
+        // UI에 예측 확률 업데이트
+        for (let i = 0; i < maxPredictions; i++) {
+            const classPrediction = predictions[i].probability.toFixed(2);
+            const percentValue = Math.round(classPrediction * 100);
+            
+            // 최고 확률 찾기
+            if (predictions[i].probability > highestProb) {
+                highestProb = predictions[i].probability;
+                highestClass = predictions[i].className;
+            }
+            
+            // 막대그래프 길이와 텍스트 갱신 (위치 고정으로 흔들림 방지)
+            const fillEl = document.getElementById(`bar-fill-${i}`);
+            const percentEl = document.getElementById(`bar-percent-${i}`);
+            
+            if (fillEl && percentEl) {
+                fillEl.style.width = percentValue + "%";
+                percentEl.innerText = percentValue + "%";
+                
+                // 확률이 가장 높은 막대 색상 강조
+                fillEl.style.backgroundColor = (predictions[i].probability === highestProb && highestProb > 0) ? "#e74c3c" : "#3498db";
+            }
+        }
+        
+        // 가장 높은 확률의 클래스를 상단에 강조 텍스트로 표시
+        if (highestProb > 0) {
+            highestPredDisplay.innerHTML = `<span style="color: #e74c3c;">${highestClass}</span> (${Math.round(highestProb * 100)}%)`;
+        } else {
+            highestPredDisplay.innerText = "얼굴을 인식할 수 없습니다.";
+        }
+    }
+
+    // 창이 로드되면 모델 초기화 함수 실행
+    window.onload = initModel;
+
+</script>
+</body>
+</html>
